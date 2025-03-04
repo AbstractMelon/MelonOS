@@ -22,4 +22,6 @@ if [ ! -f "$BUILD_DIR/os-image.bin" ]; then
 fi
 
 echo -e "${YELLOW}Running MelonOS in QEMU...${NC}"
-qemu-system-i386 -fda "$BUILD_DIR/os-image.bin"
+qemu-system-i386 -drive format=raw,file="$BUILD_DIR/os-image.bin" -s
+
+

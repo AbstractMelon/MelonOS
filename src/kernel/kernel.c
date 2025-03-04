@@ -8,6 +8,7 @@
 // Kernel entry point
 void kernel_main() {
     // Initialize screen
+    screen_init();
     screen_clear();
     
     // Print welcome message
@@ -120,3 +121,4 @@ void shell_init() {
         }
     }
 }
+

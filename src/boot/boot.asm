@@ -13,7 +13,7 @@ KERNEL_OFFSET equ 0x1000 ; Memory offset where we will load our kernel
     ; Save boot drive number
     mov [BOOT_DRIVE], dl
 
-    ; Display boot message
+    ; Print message indicating boot sector is running
     mov si, MSG_BOOT
     call print_string
 
@@ -23,6 +23,10 @@ KERNEL_OFFSET equ 0x1000 ; Memory offset where we will load our kernel
     ; Switch to protected mode
     call switch_to_pm
 
+    ; Print message indicating kernel should be running
+    mov si, MSG_START_KERNEL
+    call print_string
+
     ; We should never reach here
     jmp $
 
@@ -31,8 +35,11 @@ load_kernel:
     mov si, MSG_LOAD_KERNEL
     call print_string
 
+    mov si, MSG_LOAD_KERNEL_SECTORS
+    call print_string
+
     mov bx, KERNEL_OFFSET ; Set destination address
-    mov dh, 15            ; Load 15 sectors (7.5KB)
+    mov dh, 40            ; Load 40 sectors (20KB)
     mov dl, [BOOT_DRIVE]  ; Drive number
     
     mov ah, 0x02          ; BIOS read sector function
@@ -45,15 +52,42 @@ load_kernel:
     
     jc disk_error         ; Jump if error (carry flag set)
     
-    cmp al, 15            ; Check if we read all 15 sectors
+    cmp al, 40            ; Check if we read all 40 sectors
     jne disk_error        ; Jump if error
+
+    ; Log that the kernel has been loaded
+    mov si, MSG_KERNEL_LOADED
+    call print_string
     
     ret
 
 ; Error handler for disk operations
 disk_error:
+    ; Print error message
     mov si, MSG_DISK_ERROR
     call print_string
+
+    ; Print error code
+    mov al, ah
+    call print_hex
+    mov al, ' '
+    call print_char
+    mov al, dl
+    call print_hex
+    mov al, ' '
+    call print_char
+    mov al, dh
+    call print_hex
+    mov al, ' '
+    call print_char
+    mov al, ch
+    call print_hex
+    mov al, ' '
+    call print_char
+    mov al, cl
+    call print_hex
+
+    ; Halt CPU
     jmp $
 
 ; Print a null-terminated string
@@ -69,6 +103,38 @@ print_string:
     jmp .loop    ; Repeat for next character
 
 .done:
+    popa
+    ret
+
+; Print a single character
+print_char:
+    pusha
+    mov ah, 0x0e ; BIOS teletype function
+    int 0x10     ; Print the character
+    popa
+    ret
+
+; Print a 16-bit number in hexadecimal
+print_hex:
+    pusha
+    mov cx, 4
+    mov bx, 0
+
+.loop:
+    rol ax, 4
+    mov bx, ax
+    and bx, 0x0F
+    cmp bx, 10
+    jl .is_digit
+    add bx, 55
+    jmp .print
+.is_digit:
+    add bx, 48
+.print:
+    mov ah, 0x0e ; BIOS teletype function
+    mov al, bl
+    int 0x10     ; Print the character
+    loop .loop
     popa
     ret
 
@@ -144,8 +210,13 @@ init_pm:
 BOOT_DRIVE db 0
 MSG_BOOT db 'Booting MelonOS...', 0x0D, 0x0A, 0
 MSG_LOAD_KERNEL db 'Loading kernel into memory...', 0x0D, 0x0A, 0
-MSG_DISK_ERROR db 'Error loading kernel from disk!', 0x0D, 0x0A, 0
+MSG_LOAD_KERNEL_SECTORS db 'Loading 40 sectors starting at sector 2...', 0x0D, 0x0A, 0
+MSG_KERNEL_LOADED db 'Kernel loaded.', 0x0D, 0x0A, 0
+MSG_START_KERNEL db 'MelonOS should now be running...', 0x0D, 0x0A, 0
+MSG_DISK_ERROR db 'Error loading kernel from disk: ', 0
 
 ; Boot sector padding and signature
 times 510-($-$$) db 0
 dw 0xaa55
+
+

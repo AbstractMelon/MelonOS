@@ -64,9 +64,19 @@ $CC $LDFLAGS -T "$SRC_DIR/kernel/linker.ld" -o "$BUILD_DIR/kernel.bin" \
 
 # Create disk image
 echo -e "${GREEN}Creating disk image...${NC}"
-cat "$BUILD_DIR/boot.bin" "$BUILD_DIR/kernel.bin" > "$BUILD_DIR/os-image.bin"
+cat "$BUILD_DIR/boot.bin" > "$BUILD_DIR/os-image.bin"
 
-# Pad the image to make it bootable (multiple of 512 bytes)
+# Pad the boot sector to exactly 512 bytes
+BOOT_SIZE=$(stat -c%s "$BUILD_DIR/boot.bin")
+BOOT_PADDING=$((512 - BOOT_SIZE))
+if [ $BOOT_PADDING -gt 0 ]; then
+    dd if=/dev/zero bs=1 count=$BOOT_PADDING >> "$BUILD_DIR/os-image.bin"
+fi
+
+# Append the kernel
+cat "$BUILD_DIR/kernel.bin" >> "$BUILD_DIR/os-image.bin"
+
+# Pad the entire image to a multiple of 512 bytes
 FILESIZE=$(stat -c%s "$BUILD_DIR/os-image.bin")
 PADDING=$((512 - $FILESIZE % 512))
 if [ $PADDING -lt 512 ]; then
