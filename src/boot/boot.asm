@@ -218,5 +218,3 @@ MSG_DISK_ERROR db 'Error loading kernel from disk: ', 0
 ; Boot sector padding and signature
 times 510-($-$$) db 0
 dw 0xaa55
-
-
