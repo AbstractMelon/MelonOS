@@ -289,20 +289,13 @@ static void cmd_calc(int argc, char *argv[]) {
 
 static void cmd_melon(int argc, char *argv[]) {
     (void)argc; (void)argv;
+    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_println("");
-    vga_print_colored("        _..--\"\"--.._\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("      ,'             `.\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("     /    _       _     \\\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("    |   ,' `.   ,' `.    |\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("    |  /     \\ /     \\   |\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("    | |      | |      |  |\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("    |  \\     / \\     /   |\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("    |   `._,'   `._,'    |\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("     \\                  /\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("      `.              ,'\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("        `\"--..__..--\"\"\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_println("");
-    vga_print_colored("        M E L O N O S\n", VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+    vga_println("   __  __      _              ___  ____  ");
+    vga_println("  |  \\/  | ___| | ___  _ __  / _ \\/ ___| ");
+    vga_println("  | |\\/| |/ _ \\ |/ _ \\| '_ \\| | | \\___ \\ ");
+    vga_println("  | |  | |  __/ | (_) | | | | |_| |___) |");
+    vga_println("  |_|  |_|\\___|_|\\___/|_| |_|\\___/|____/ ");
     vga_println("");
 }
 
