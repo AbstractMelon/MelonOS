@@ -68,6 +68,7 @@ void kernel_main(uint32_t magic, uint32_t mboot_addr) {
         vga_print_status("Persistent filesystem mounted", "OK", VGA_COLOR_LIGHT_GREEN);
     } else {
         vga_print_status("Persistent filesystem not formatted (run mkfs)", "WARN", VGA_COLOR_YELLOW);
+        timer_sleep(2000);
     }
 
     /* All systems go */
