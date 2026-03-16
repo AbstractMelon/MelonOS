@@ -53,6 +53,9 @@ void vga_println(const char *str);
 /* Print a colored string (restores previous color after) */
 void vga_print_colored(const char *str, enum vga_color fg, enum vga_color bg);
 
+/* Print a status log */
+void vga_print_status(const char *message, const char *status, enum vga_color status_color);
+
 /* Print an integer */
 void vga_print_int(int num);
 

@@ -10,6 +10,8 @@
 #include "vga.h"
 #include "idt.h"
 #include "keyboard.h"
+#include "program.h"
+#include "program_builtin.h"
 #include "timer.h"
 #include "shell.h"
 #include "string.h"
@@ -40,34 +42,26 @@ void kernel_main(uint32_t magic, uint32_t mboot_addr) {
 
     /* Initialize GDT */
     gdt_init();
-    vga_print_colored("  [", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    vga_print_colored("OK", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("] ", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    vga_println("Global Descriptor Table initialized");
+    vga_print_status("Global Descriptor Table initialized", "OK", VGA_COLOR_LIGHT_GREEN);
 
     /* Initialize IDT */
     idt_init();
-    vga_print_colored("  [", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    vga_print_colored("OK", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("] ", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    vga_println("Interrupt Descriptor Table initialized");
+    vga_print_status("Interrupt Descriptor Table initialized", "OK", VGA_COLOR_LIGHT_GREEN);
 
     /* Initialize timer at 100 Hz */
     timer_init(100);
-    vga_print_colored("  [", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    vga_print_colored("OK", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("] ", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    vga_println("PIT Timer initialized (100 Hz)");
+    vga_print_status("PIT Timer initialized (100 Hz)", "OK", VGA_COLOR_LIGHT_GREEN);
 
     /* Initialize keyboard */
     keyboard_init();
-    vga_print_colored("  [", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    vga_print_colored("OK", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_print_colored("] ", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    vga_println("PS/2 Keyboard initialized");
+    vga_print_status("PS/2 Keyboard initialized", "OK", VGA_COLOR_LIGHT_GREEN);
 
     /* Enable interrupts only after IRQ handlers are installed */
     __asm__ volatile ("sti");
+
+    /* Register shell-launchable programs */
+    programs_init();
+    programs_register_builtin();
 
     /* All systems go */
     vga_println("");

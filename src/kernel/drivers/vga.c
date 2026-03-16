@@ -108,6 +108,15 @@ void vga_print_colored(const char *str, enum vga_color fg, enum vga_color bg) {
     current_color = old_color;
 }
 
+// Function to print a status log that takes an input color, a message, and a status (eg "OK", "FAIL", etc.)
+void vga_print_status(const char *message, const char *status, enum vga_color status_color) {
+    vga_print_colored("  [", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+    vga_print_colored(status, status_color, VGA_COLOR_BLACK);
+    vga_print_colored("] ", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+    vga_println(message);
+}
+
+
 void vga_print_int(int num) {
     if (num == 0) {
         vga_putchar('0');
