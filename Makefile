@@ -40,9 +40,10 @@ OBJECTS  = $(ASM_OBJ) $(C_OBJ)
 # Output
 KERNEL   = $(BUILD_DIR)/melonos.bin
 ISO      = $(BUILD_DIR)/melonos.iso
+DISK_IMG = $(BUILD_DIR)/melonos_disk.img
 
 # Default target
-.PHONY: all clean run debug iso
+.PHONY: all clean run debug iso dev
 
 all: $(ISO)
 
@@ -70,17 +71,21 @@ $(ISO): $(KERNEL)
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
 
+# Persistent virtual disk image for filesystem data
+$(DISK_IMG): | $(BUILD_DIR)
+	@test -f $(DISK_IMG) || dd if=/dev/zero of=$(DISK_IMG) bs=1M count=16 status=none
+
 # Run in QEMU
-run: $(ISO)
-	qemu-system-i386 -cdrom $(ISO) -m 128M
+run: $(ISO) $(DISK_IMG)
+	qemu-system-i386 -cdrom $(ISO) -m 128M -drive file=$(DISK_IMG),format=raw,if=ide,index=0,media=disk
 
 # Run in QEMU with debug output
-debug: $(ISO)
-	qemu-system-i386 -cdrom $(ISO) -m 128M -d int,cpu_reset -no-reboot
+debug: $(ISO) $(DISK_IMG)
+	qemu-system-i386 -cdrom $(ISO) -m 128M -drive file=$(DISK_IMG),format=raw,if=ide,index=0,media=disk -d int,cpu_reset -no-reboot
 
 # Development: build and run
-dev: $(ISO)
-	qemu-system-i386 -cdrom $(ISO) -m 128M -serial stdio
+dev: $(ISO) $(DISK_IMG)
+	qemu-system-i386 -cdrom $(ISO) -m 128M -drive file=$(DISK_IMG),format=raw,if=ide,index=0,media=disk -serial stdio
 
 # Clean build artifacts
 clean:

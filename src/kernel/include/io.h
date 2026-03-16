@@ -25,6 +25,13 @@ static inline uint8_t inb(uint16_t port) {
     return ret;
 }
 
+/* Read a word from a port */
+static inline uint16_t inw(uint16_t port) {
+    uint16_t ret;
+    __asm__ volatile ("inw %1, %0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
+
 /* Wait for I/O operation to complete */
 static inline void io_wait(void) {
     outb(0x80, 0);

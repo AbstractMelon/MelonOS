@@ -7,6 +7,7 @@
 #include "program.h"
 #include "kernel.h"
 #include "shell.h"
+#include "fs.h"
 #include "string.h"
 #include "timer.h"
 #include "vga.h"
@@ -25,6 +26,12 @@ static void program_calc(int argc, char *argv[]);
 static void program_melon(int argc, char *argv[]);
 static void program_mem(int argc, char *argv[]);
 static void program_date(int argc, char *argv[]);
+static void program_mkfs(int argc, char *argv[]);
+static void program_ls(int argc, char *argv[]);
+static void program_write(int argc, char *argv[]);
+static void program_cat(int argc, char *argv[]);
+static void program_rm(int argc, char *argv[]);
+static void program_fsinfo(int argc, char *argv[]);
 static uint8_t cmos_read(uint8_t reg);
 static uint8_t bcd_to_bin(uint8_t bcd);
 
@@ -42,7 +49,13 @@ void programs_register_builtin(void) {
         { "calc",     "Calculator (calc <num> <op> <num>)",   program_calc },
         { "melon",    "Display the MelonOS logo",             program_melon },
         { "mem",      "Show memory information",              program_mem },
-        { "date",     "Show current date/time (from CMOS)",   program_date }
+        { "date",     "Show current date/time (from CMOS)",   program_date },
+        { "mkfs",     "Format persistent filesystem",          program_mkfs },
+        { "ls",       "List files in filesystem",              program_ls },
+        { "write",    "Write text file (write <name> <text>)", program_write },
+        { "cat",      "Print file contents (cat <name>)",      program_cat },
+        { "rm",       "Delete a file (rm <name>)",             program_rm },
+        { "fsinfo",   "Show filesystem status",                program_fsinfo }
     };
 
     for (size_t index = 0; index < sizeof(builtins) / sizeof(builtins[0]); index++) {
@@ -376,4 +389,158 @@ static void program_mem(int argc, char *argv[]) {
     vga_print("Total:           ~");
     vga_print_int((lo_mem + hi_mem) / 1024);
     vga_println(" MB");
+}
+
+static void program_mkfs(int argc, char *argv[]) {
+    (void)argc;
+    (void)argv;
+
+    vga_print("Formatting persistent filesystem... ");
+    if (fs_format() == 0) {
+        vga_print_colored("done\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+    } else {
+        vga_print_colored("failed\n", VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+    }
+}
+
+static void program_ls(int argc, char *argv[]) {
+    fs_file_info_t files[64];
+    size_t count = 0;
+
+    (void)argc;
+    (void)argv;
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    if (fs_list(files, 64, &count) != 0) {
+        vga_println("Failed to read directory.");
+        return;
+    }
+
+    if (count == 0) {
+        vga_println("No files.");
+        return;
+    }
+
+    for (size_t i = 0; i < count && i < 64; i++) {
+        vga_print("  ");
+        vga_print_colored(files[i].name, VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        vga_print("  ");
+        vga_print_int((int)files[i].size);
+        vga_println(" bytes");
+    }
+
+    if (count > 64) {
+        vga_print("  ... and ");
+        vga_print_int((int)(count - 64));
+        vga_println(" more");
+    }
+}
+
+static void program_write(int argc, char *argv[]) {
+    uint32_t size;
+
+    if (argc < 3) {
+        vga_println("Usage: write <name> <text>");
+        return;
+    }
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    size = (uint32_t)strlen(argv[2]);
+    if (size > FS_READ_BUFFER_SIZE) {
+        vga_println("Text too large for single file.");
+        return;
+    }
+
+    if (fs_write_file(argv[1], (const uint8_t *)argv[2], size) != 0) {
+        vga_println("Write failed. Check name/space limits.");
+        return;
+    }
+
+    vga_print("Wrote ");
+    vga_print_int((int)size);
+    vga_print(" bytes to ");
+    vga_println(argv[1]);
+}
+
+static void program_cat(int argc, char *argv[]) {
+    uint8_t buffer[FS_READ_BUFFER_SIZE + 1];
+    uint32_t size = 0;
+
+    if (argc < 2) {
+        vga_println("Usage: cat <name>");
+        return;
+    }
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    if (fs_read_file(argv[1], buffer, FS_READ_BUFFER_SIZE, &size) != 0) {
+        vga_println("Read failed or file not found.");
+        return;
+    }
+
+    buffer[size] = '\0';
+    vga_println((const char *)buffer);
+}
+
+static void program_rm(int argc, char *argv[]) {
+    if (argc < 2) {
+        vga_println("Usage: rm <name>");
+        return;
+    }
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    if (fs_delete_file(argv[1]) != 0) {
+        vga_println("Delete failed or file not found.");
+        return;
+    }
+
+    vga_print("Deleted ");
+    vga_println(argv[1]);
+}
+
+static void program_fsinfo(int argc, char *argv[]) {
+    fs_info_t info;
+
+    (void)argc;
+    (void)argv;
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    if (fs_get_info(&info) != 0) {
+        vga_println("Could not query filesystem info.");
+        return;
+    }
+
+    vga_print("Total sectors:    ");
+    vga_print_int((int)info.total_sectors);
+    vga_println("");
+    vga_print("Data blocks:      ");
+    vga_print_int((int)info.total_data_blocks);
+    vga_println("");
+    vga_print("Free data blocks: ");
+    vga_print_int((int)info.free_data_blocks);
+    vga_println("");
+    vga_print("Inodes used:      ");
+    vga_print_int((int)info.used_inodes);
+    vga_print("/");
+    vga_print_int((int)info.total_inodes);
+    vga_println("");
 }

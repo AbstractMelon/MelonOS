@@ -10,6 +10,7 @@
 #include "vga.h"
 #include "idt.h"
 #include "keyboard.h"
+#include "fs.h"
 #include "program.h"
 #include "program_builtin.h"
 #include "timer.h"
@@ -62,6 +63,12 @@ void kernel_main(uint32_t magic, uint32_t mboot_addr) {
     /* Register shell-launchable programs */
     programs_init();
     programs_register_builtin();
+
+    if (fs_init() == 0) {
+        vga_print_status("Persistent filesystem mounted", "OK", VGA_COLOR_LIGHT_GREEN);
+    } else {
+        vga_print_status("Persistent filesystem not formatted (run mkfs)", "WARN", VGA_COLOR_YELLOW);
+    }
 
     /* All systems go */
     vga_println("");

@@ -1,0 +1,17 @@
+/*
+ * MelonOS - ATA PIO Driver
+ * Minimal primary-master ATA access for sector I/O
+ */
+
+#ifndef ATA_H
+#define ATA_H
+
+#include <stdint.h>
+
+#define ATA_SECTOR_SIZE 512
+
+int ata_init(void);
+int ata_read_sector(uint32_t lba, uint8_t *buffer);
+int ata_write_sector(uint32_t lba, const uint8_t *buffer);
+
+#endif /* ATA_H */
