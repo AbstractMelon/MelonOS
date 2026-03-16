@@ -1,6 +1,6 @@
 /*
  * MelonOS - Persistent Filesystem
- * Flat filesystem stored on ATA disk sectors
+ * Hierarchical filesystem stored on ATA disk sectors
  */
 
 #include "fs.h"
@@ -8,7 +8,7 @@
 #include "string.h"
 
 #define FS_MAGIC                0x4D465331u /* MFS1 */
-#define FS_VERSION              1u
+#define FS_VERSION              2u
 
 #define FS_START_LBA            2048u
 #define FS_TOTAL_SECTORS        3072u
@@ -22,6 +22,9 @@
 
 #define FS_MAX_INODES           96u
 #define FS_MAX_DIRECT_BLOCKS    7u
+#define FS_ROOT_INODE           0u
+
+#define FS_NODE_ANY             0u
 
 typedef struct __attribute__((packed)) {
     uint32_t magic;
@@ -40,12 +43,15 @@ typedef struct __attribute__((packed)) {
 
 typedef struct __attribute__((packed)) {
     uint8_t used;
+    uint8_t type;
+    uint16_t parent;
     char name[FS_NAME_MAX_LEN + 1];
     uint32_t size;
     uint32_t direct[FS_MAX_DIRECT_BLOCKS];
 } fs_inode_t;
 
 static int fs_ready = 0;
+static uint16_t cwd_inode = FS_ROOT_INODE;
 static fs_superblock_t superblock;
 
 static uint8_t inode_bitmap[ATA_SECTOR_SIZE];
@@ -73,6 +79,10 @@ static int fs_is_valid_name(const char *name) {
 
     len = strlen(name);
     if (len == 0 || len > FS_NAME_MAX_LEN) {
+        return 0;
+    }
+
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
         return 0;
     }
 
@@ -152,40 +162,78 @@ static int fs_write_metadata(void) {
     return 0;
 }
 
-static int fs_find_inode(const char *name) {
+static int fs_next_component(const char *path, size_t *position, char *component) {
+    size_t i = 0;
+
+    while (path[*position] == '/') {
+        (*position)++;
+    }
+
+    if (path[*position] == '\0') {
+        return 0;
+    }
+
+    while (path[*position] != '\0' && path[*position] != '/') {
+        if (i >= FS_NAME_MAX_LEN) {
+            return -1;
+        }
+        component[i++] = path[*position];
+        (*position)++;
+    }
+
+    component[i] = '\0';
+    return 1;
+}
+
+static int fs_has_more_components(const char *path, size_t position) {
+    while (path[position] == '/') {
+        position++;
+    }
+    return path[position] != '\0';
+}
+
+static int fs_find_child(uint16_t parent, const char *name, uint8_t required_type) {
     fs_inode_t *inodes = fs_inode_table();
 
-    for (uint32_t index = 0; index < FS_MAX_INODES; index++) {
-        if (inodes[index].used && strcmp(inodes[index].name, name) == 0) {
-            return (int)index;
+    for (uint32_t i = 0; i < FS_MAX_INODES; i++) {
+        if (!inodes[i].used) {
+            continue;
         }
+        if (inodes[i].parent != parent) {
+            continue;
+        }
+        if (strcmp(inodes[i].name, name) != 0) {
+            continue;
+        }
+        if (required_type != FS_NODE_ANY && inodes[i].type != required_type) {
+            continue;
+        }
+        return (int)i;
     }
 
     return -1;
 }
 
 static int fs_find_free_inode(void) {
-    for (uint32_t index = 0; index < FS_MAX_INODES; index++) {
-        if (!bitmap_get(inode_bitmap, index)) {
-            return (int)index;
+    for (uint32_t i = 0; i < FS_MAX_INODES; i++) {
+        if (!bitmap_get(inode_bitmap, i)) {
+            return (int)i;
         }
     }
     return -1;
 }
 
 static int fs_find_free_data_block(void) {
-    uint32_t max_blocks = superblock.max_data_blocks;
-
-    for (uint32_t index = 0; index < max_blocks; index++) {
-        if (!bitmap_get(data_bitmap, index)) {
-            return (int)index;
+    for (uint32_t i = 0; i < superblock.max_data_blocks; i++) {
+        if (!bitmap_get(data_bitmap, i)) {
+            return (int)i;
         }
     }
     return -1;
 }
 
-static void fs_release_inode_blocks(fs_inode_t *inode) {
-    if (inode == 0) {
+static void fs_release_file_blocks(fs_inode_t *inode) {
+    if (inode == 0 || inode->type != FS_NODE_FILE) {
         return;
     }
 
@@ -198,6 +246,136 @@ static void fs_release_inode_blocks(fs_inode_t *inode) {
     }
 
     inode->size = 0;
+}
+
+static int fs_dir_is_empty(uint16_t inode_index) {
+    fs_inode_t *inodes = fs_inode_table();
+
+    for (uint32_t i = 0; i < FS_MAX_INODES; i++) {
+        if (inodes[i].used && inodes[i].parent == inode_index && i != inode_index) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int fs_resolve_path(const char *path, uint16_t *out_inode) {
+    fs_inode_t *inodes = fs_inode_table();
+    uint16_t current;
+    size_t position = 0;
+    char component[FS_NAME_MAX_LEN + 1];
+
+    if (path == 0 || out_inode == 0) {
+        return -1;
+    }
+
+    if (path[0] == '\0') {
+        *out_inode = cwd_inode;
+        return 0;
+    }
+
+    if (strcmp(path, "/") == 0) {
+        *out_inode = FS_ROOT_INODE;
+        return 0;
+    }
+
+    current = (path[0] == '/') ? FS_ROOT_INODE : cwd_inode;
+
+    while (1) {
+        int rc = fs_next_component(path, &position, component);
+        int has_more;
+        int child;
+
+        if (rc < 0) {
+            return -1;
+        }
+        if (rc == 0) {
+            break;
+        }
+
+        if (strcmp(component, ".") == 0) {
+            continue;
+        }
+
+        if (strcmp(component, "..") == 0) {
+            if (current != FS_ROOT_INODE) {
+                current = inodes[current].parent;
+            }
+            continue;
+        }
+
+        has_more = fs_has_more_components(path, position);
+        child = fs_find_child(current, component, has_more ? FS_NODE_DIR : FS_NODE_ANY);
+        if (child < 0) {
+            return -1;
+        }
+
+        current = (uint16_t)child;
+    }
+
+    *out_inode = current;
+    return 0;
+}
+
+static int fs_resolve_parent(const char *path, uint16_t *out_parent, char *out_leaf) {
+    fs_inode_t *inodes = fs_inode_table();
+    uint16_t current;
+    size_t position = 0;
+    char component[FS_NAME_MAX_LEN + 1];
+    int found_any = 0;
+
+    if (path == 0 || out_parent == 0 || out_leaf == 0) {
+        return -1;
+    }
+
+    current = (path[0] == '/') ? FS_ROOT_INODE : cwd_inode;
+
+    while (1) {
+        int rc = fs_next_component(path, &position, component);
+        int has_more;
+
+        if (rc < 0) {
+            return -1;
+        }
+        if (rc == 0) {
+            break;
+        }
+
+        found_any = 1;
+        has_more = fs_has_more_components(path, position);
+
+        if (!has_more) {
+            if (!fs_is_valid_name(component)) {
+                return -1;
+            }
+            *out_parent = current;
+            strcpy(out_leaf, component);
+            return 0;
+        }
+
+        if (strcmp(component, ".") == 0) {
+            continue;
+        }
+
+        if (strcmp(component, "..") == 0) {
+            if (current != FS_ROOT_INODE) {
+                current = inodes[current].parent;
+            }
+            continue;
+        }
+
+        {
+            int child = fs_find_child(current, component, FS_NODE_DIR);
+            if (child < 0) {
+                return -1;
+            }
+            current = (uint16_t)child;
+        }
+    }
+
+    (void)found_any;
+    return -1;
 }
 
 int fs_init(void) {
@@ -230,6 +408,7 @@ int fs_init(void) {
         return -1;
     }
 
+    cwd_inode = FS_ROOT_INODE;
     fs_ready = 1;
     return 0;
 }
@@ -240,6 +419,7 @@ int fs_is_ready(void) {
 
 int fs_format(void) {
     uint8_t zero_sector[ATA_SECTOR_SIZE];
+    fs_inode_t *inodes;
 
     if (ata_init() != 0) {
         fs_ready = 0;
@@ -264,6 +444,15 @@ int fs_format(void) {
     superblock.max_inodes = FS_MAX_INODES;
     superblock.max_data_blocks = fs_max_data_blocks();
 
+    inodes = fs_inode_table();
+    inodes[FS_ROOT_INODE].used = 1;
+    inodes[FS_ROOT_INODE].type = FS_NODE_DIR;
+    inodes[FS_ROOT_INODE].parent = FS_ROOT_INODE;
+    strcpy(inodes[FS_ROOT_INODE].name, "/");
+    inodes[FS_ROOT_INODE].size = 0;
+    memset(inodes[FS_ROOT_INODE].direct, 0, sizeof(inodes[FS_ROOT_INODE].direct));
+    bitmap_set(inode_bitmap, FS_ROOT_INODE, 1);
+
     if (fs_write_metadata() != 0) {
         fs_ready = 0;
         return -1;
@@ -276,15 +465,19 @@ int fs_format(void) {
         }
     }
 
+    cwd_inode = FS_ROOT_INODE;
     fs_ready = 1;
     return 0;
 }
 
-int fs_list(fs_file_info_t *files, size_t max_files, size_t *out_count) {
+int fs_mkdir(const char *path) {
     fs_inode_t *inodes;
-    size_t count = 0;
+    uint16_t parent;
+    char leaf[FS_NAME_MAX_LEN + 1];
+    int existing;
+    int inode_index;
 
-    if (!fs_ready || files == 0 || out_count == 0) {
+    if (!fs_ready || path == 0) {
         return -1;
     }
 
@@ -292,15 +485,109 @@ int fs_list(fs_file_info_t *files, size_t max_files, size_t *out_count) {
         return -1;
     }
 
+    if (fs_resolve_parent(path, &parent, leaf) != 0) {
+        return -1;
+    }
+
+    existing = fs_find_child(parent, leaf, FS_NODE_ANY);
+    if (existing >= 0) {
+        return -1;
+    }
+
+    inode_index = fs_find_free_inode();
+    if (inode_index < 0) {
+        return -1;
+    }
+
     inodes = fs_inode_table();
-    for (uint32_t index = 0; index < FS_MAX_INODES; index++) {
-        if (!inodes[index].used) {
+    memset(&inodes[inode_index], 0, sizeof(inodes[inode_index]));
+    inodes[inode_index].used = 1;
+    inodes[inode_index].type = FS_NODE_DIR;
+    inodes[inode_index].parent = parent;
+    strcpy(inodes[inode_index].name, leaf);
+    bitmap_set(inode_bitmap, (uint32_t)inode_index, 1);
+
+    if (fs_write_metadata() != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int fs_rmdir(const char *path) {
+    fs_inode_t *inodes;
+    uint16_t inode_index;
+
+    if (!fs_ready || path == 0) {
+        return -1;
+    }
+
+    if (fs_read_metadata() != 0) {
+        return -1;
+    }
+
+    if (fs_resolve_path(path, &inode_index) != 0) {
+        return -1;
+    }
+
+    if (inode_index == FS_ROOT_INODE) {
+        return -1;
+    }
+
+    inodes = fs_inode_table();
+    if (!inodes[inode_index].used || inodes[inode_index].type != FS_NODE_DIR) {
+        return -1;
+    }
+
+    if (!fs_dir_is_empty(inode_index)) {
+        return -1;
+    }
+
+    memset(&inodes[inode_index], 0, sizeof(inodes[inode_index]));
+    bitmap_set(inode_bitmap, inode_index, 0);
+
+    if (fs_write_metadata() != 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+int fs_list_dir(const char *path, fs_entry_info_t *entries, size_t max_entries, size_t *out_count) {
+    fs_inode_t *inodes;
+    uint16_t dir;
+    size_t count = 0;
+
+    if (!fs_ready || entries == 0 || out_count == 0) {
+        return -1;
+    }
+
+    if (fs_read_metadata() != 0) {
+        return -1;
+    }
+
+    if (path == 0 || path[0] == '\0') {
+        dir = cwd_inode;
+    } else {
+        if (fs_resolve_path(path, &dir) != 0) {
+            return -1;
+        }
+    }
+
+    inodes = fs_inode_table();
+    if (!inodes[dir].used || inodes[dir].type != FS_NODE_DIR) {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < FS_MAX_INODES; i++) {
+        if (!inodes[i].used || inodes[i].parent != dir || i == dir) {
             continue;
         }
 
-        if (count < max_files) {
-            strcpy(files[count].name, inodes[index].name);
-            files[count].size = inodes[index].size;
+        if (count < max_entries) {
+            strcpy(entries[count].name, inodes[i].name);
+            entries[count].type = inodes[i].type;
+            entries[count].size = inodes[i].size;
         }
         count++;
     }
@@ -309,14 +596,102 @@ int fs_list(fs_file_info_t *files, size_t max_files, size_t *out_count) {
     return 0;
 }
 
-int fs_write_file(const char *name, const uint8_t *data, uint32_t size) {
+int fs_set_cwd(const char *path) {
     fs_inode_t *inodes;
-    fs_inode_t *inode;
+    uint16_t inode_index;
+
+    if (!fs_ready || path == 0) {
+        return -1;
+    }
+
+    if (fs_read_metadata() != 0) {
+        return -1;
+    }
+
+    if (fs_resolve_path(path, &inode_index) != 0) {
+        return -1;
+    }
+
+    inodes = fs_inode_table();
+    if (!inodes[inode_index].used || inodes[inode_index].type != FS_NODE_DIR) {
+        return -1;
+    }
+
+    cwd_inode = inode_index;
+    return 0;
+}
+
+int fs_get_cwd(char *buffer, size_t buffer_size) {
+    fs_inode_t *inodes;
+    uint16_t stack[FS_MAX_INODES];
+    uint16_t current;
+    size_t depth = 0;
+    size_t used = 0;
+
+    if (!fs_ready || buffer == 0 || buffer_size < 2) {
+        return -1;
+    }
+
+    if (fs_read_metadata() != 0) {
+        return -1;
+    }
+
+    inodes = fs_inode_table();
+    current = cwd_inode;
+
+    if (current == FS_ROOT_INODE) {
+        if (buffer_size < 2) {
+            return -1;
+        }
+        buffer[0] = '/';
+        buffer[1] = '\0';
+        return 0;
+    }
+
+    while (current != FS_ROOT_INODE && depth < FS_MAX_INODES) {
+        stack[depth++] = current;
+        current = inodes[current].parent;
+    }
+
+    if (depth == FS_MAX_INODES) {
+        return -1;
+    }
+
+    buffer[0] = '\0';
+    for (size_t i = depth; i > 0; i--) {
+        const char *name = inodes[stack[i - 1]].name;
+        size_t name_len = strlen(name);
+
+        if (used + 1 + name_len + 1 > buffer_size) {
+            return -1;
+        }
+
+        buffer[used++] = '/';
+        for (size_t j = 0; j < name_len; j++) {
+            buffer[used++] = name[j];
+        }
+        buffer[used] = '\0';
+    }
+
+    if (used == 0) {
+        buffer[0] = '/';
+        buffer[1] = '\0';
+    }
+
+    return 0;
+}
+
+int fs_write_file(const char *path, const uint8_t *data, uint32_t size) {
+    fs_inode_t *inodes;
+    uint16_t parent;
+    char leaf[FS_NAME_MAX_LEN + 1];
+    int existing;
     int inode_index;
+    fs_inode_t *inode;
     uint32_t blocks_needed;
     uint8_t sector[ATA_SECTOR_SIZE];
 
-    if (!fs_ready || (size > 0 && data == 0) || !fs_is_valid_name(name)) {
+    if (!fs_ready || path == 0 || (size > 0 && data == 0)) {
         return -1;
     }
 
@@ -329,18 +704,29 @@ int fs_write_file(const char *name, const uint8_t *data, uint32_t size) {
         return -1;
     }
 
+    if (fs_resolve_parent(path, &parent, leaf) != 0) {
+        return -1;
+    }
+
+    existing = fs_find_child(parent, leaf, FS_NODE_ANY);
     inodes = fs_inode_table();
-    inode_index = fs_find_inode(name);
-    if (inode_index < 0) {
+
+    if (existing >= 0) {
+        if (inodes[existing].type != FS_NODE_FILE) {
+            return -1;
+        }
+        inode_index = existing;
+    } else {
         inode_index = fs_find_free_inode();
         if (inode_index < 0) {
             return -1;
         }
+        memset(&inodes[inode_index], 0, sizeof(inodes[inode_index]));
     }
 
     inode = &inodes[inode_index];
     if (inode->used) {
-        fs_release_inode_blocks(inode);
+        fs_release_file_blocks(inode);
     }
 
     for (uint32_t block_index = 0; block_index < blocks_needed; block_index++) {
@@ -349,7 +735,7 @@ int fs_write_file(const char *name, const uint8_t *data, uint32_t size) {
         uint32_t chunk;
 
         if (free_block < 0) {
-            fs_release_inode_blocks(inode);
+            fs_release_file_blocks(inode);
             return -1;
         }
 
@@ -365,14 +751,16 @@ int fs_write_file(const char *name, const uint8_t *data, uint32_t size) {
         memcpy(sector, data + offset, chunk);
 
         if (ata_write_sector(fs_sector_lba(FS_DATA_START_SECTOR + (uint32_t)free_block), sector) != 0) {
-            fs_release_inode_blocks(inode);
+            fs_release_file_blocks(inode);
             return -1;
         }
     }
 
     inode->used = 1;
+    inode->type = FS_NODE_FILE;
+    inode->parent = parent;
     memset(inode->name, 0, sizeof(inode->name));
-    strncpy(inode->name, name, FS_NAME_MAX_LEN);
+    strncpy(inode->name, leaf, FS_NAME_MAX_LEN);
     inode->name[FS_NAME_MAX_LEN] = '\0';
     inode->size = size;
     bitmap_set(inode_bitmap, (uint32_t)inode_index, 1);
@@ -384,13 +772,13 @@ int fs_write_file(const char *name, const uint8_t *data, uint32_t size) {
     return 0;
 }
 
-int fs_read_file(const char *name, uint8_t *buffer, uint32_t buffer_size, uint32_t *out_size) {
+int fs_read_file(const char *path, uint8_t *buffer, uint32_t buffer_size, uint32_t *out_size) {
     fs_inode_t *inodes;
+    uint16_t inode_index;
     fs_inode_t *inode;
-    int inode_index;
     uint8_t sector[ATA_SECTOR_SIZE];
 
-    if (!fs_ready || buffer == 0 || out_size == 0 || !fs_is_valid_name(name)) {
+    if (!fs_ready || path == 0 || buffer == 0 || out_size == 0) {
         return -1;
     }
 
@@ -398,13 +786,17 @@ int fs_read_file(const char *name, uint8_t *buffer, uint32_t buffer_size, uint32
         return -1;
     }
 
-    inodes = fs_inode_table();
-    inode_index = fs_find_inode(name);
-    if (inode_index < 0) {
+    if (fs_resolve_path(path, &inode_index) != 0) {
         return -1;
     }
 
+    inodes = fs_inode_table();
     inode = &inodes[inode_index];
+
+    if (!inode->used || inode->type != FS_NODE_FILE) {
+        return -1;
+    }
+
     if (inode->size > buffer_size) {
         return -1;
     }
@@ -433,12 +825,12 @@ int fs_read_file(const char *name, uint8_t *buffer, uint32_t buffer_size, uint32
     return 0;
 }
 
-int fs_delete_file(const char *name) {
+int fs_delete_file(const char *path) {
     fs_inode_t *inodes;
+    uint16_t inode_index;
     fs_inode_t *inode;
-    int inode_index;
 
-    if (!fs_ready || !fs_is_valid_name(name)) {
+    if (!fs_ready || path == 0) {
         return -1;
     }
 
@@ -446,14 +838,18 @@ int fs_delete_file(const char *name) {
         return -1;
     }
 
-    inodes = fs_inode_table();
-    inode_index = fs_find_inode(name);
-    if (inode_index < 0) {
+    if (fs_resolve_path(path, &inode_index) != 0) {
         return -1;
     }
 
+    inodes = fs_inode_table();
     inode = &inodes[inode_index];
-    fs_release_inode_blocks(inode);
+
+    if (!inode->used || inode->type != FS_NODE_FILE) {
+        return -1;
+    }
+
+    fs_release_file_blocks(inode);
     memset(inode, 0, sizeof(*inode));
     bitmap_set(inode_bitmap, (uint32_t)inode_index, 0);
 

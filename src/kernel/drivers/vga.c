@@ -116,7 +116,6 @@ void vga_print_status(const char *message, const char *status, enum vga_color st
     vga_println(message);
 }
 
-
 void vga_print_int(int num) {
     if (num == 0) {
         vga_putchar('0');

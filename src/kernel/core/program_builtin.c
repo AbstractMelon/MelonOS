@@ -31,9 +31,16 @@ static void program_ls(int argc, char *argv[]);
 static void program_write(int argc, char *argv[]);
 static void program_cat(int argc, char *argv[]);
 static void program_rm(int argc, char *argv[]);
+static void program_mkdir(int argc, char *argv[]);
+static void program_rmdir(int argc, char *argv[]);
+static void program_cd(int argc, char *argv[]);
+static void program_pwd(int argc, char *argv[]);
+static void program_tree(int argc, char *argv[]);
 static void program_fsinfo(int argc, char *argv[]);
 static uint8_t cmos_read(uint8_t reg);
 static uint8_t bcd_to_bin(uint8_t bcd);
+static int path_join(const char *base, const char *name, char *out, size_t out_size);
+static void print_tree_recursive(const char *path, int depth);
 
 void programs_register_builtin(void) {
     static const program_t builtins[] = {
@@ -51,10 +58,15 @@ void programs_register_builtin(void) {
         { "mem",      "Show memory information",              program_mem },
         { "date",     "Show current date/time (from CMOS)",   program_date },
         { "mkfs",     "Format persistent filesystem",          program_mkfs },
-        { "ls",       "List files in filesystem",              program_ls },
-        { "write",    "Write text file (write <name> <text>)", program_write },
-        { "cat",      "Print file contents (cat <name>)",      program_cat },
-        { "rm",       "Delete a file (rm <name>)",             program_rm },
+        { "ls",       "List entries (ls [path])",              program_ls },
+        { "mkdir",    "Create folder (mkdir <path>)",          program_mkdir },
+        { "rmdir",    "Remove empty folder",                   program_rmdir },
+        { "cd",       "Change directory (cd <path>)",          program_cd },
+        { "pwd",      "Print current directory",               program_pwd },
+        { "tree",     "Show directory tree",                   program_tree },
+        { "write",    "Write text file (write <path> <text>)", program_write },
+        { "cat",      "Print file contents (cat <path>)",      program_cat },
+        { "rm",       "Delete a file (rm <path>)",             program_rm },
         { "fsinfo",   "Show filesystem status",                program_fsinfo }
     };
 
@@ -404,18 +416,20 @@ static void program_mkfs(int argc, char *argv[]) {
 }
 
 static void program_ls(int argc, char *argv[]) {
-    fs_file_info_t files[64];
+    fs_entry_info_t entries[64];
+    const char *target = "";
     size_t count = 0;
 
-    (void)argc;
-    (void)argv;
+    if (argc >= 2) {
+        target = argv[1];
+    }
 
     if (!fs_is_ready()) {
         vga_println("Filesystem unavailable. Run mkfs first.");
         return;
     }
 
-    if (fs_list(files, 64, &count) != 0) {
+    if (fs_list_dir(target, entries, 64, &count) != 0) {
         vga_println("Failed to read directory.");
         return;
     }
@@ -427,10 +441,18 @@ static void program_ls(int argc, char *argv[]) {
 
     for (size_t i = 0; i < count && i < 64; i++) {
         vga_print("  ");
-        vga_print_colored(files[i].name, VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-        vga_print("  ");
-        vga_print_int((int)files[i].size);
-        vga_println(" bytes");
+        if (entries[i].type == FS_NODE_DIR) {
+            vga_print_colored("<DIR> ", VGA_COLOR_LIGHT_BLUE, VGA_COLOR_BLACK);
+            vga_print_colored(entries[i].name, VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+            vga_println("/");
+        } else {
+            vga_print_colored("<FILE>", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+            vga_print(" ");
+            vga_print_colored(entries[i].name, VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+            vga_print("  ");
+            vga_print_int((int)entries[i].size);
+            vga_println(" bytes");
+        }
     }
 
     if (count > 64) {
@@ -440,11 +462,193 @@ static void program_ls(int argc, char *argv[]) {
     }
 }
 
+static void program_mkdir(int argc, char *argv[]) {
+    if (argc < 2) {
+        vga_println("Usage: mkdir <path>");
+        return;
+    }
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    if (fs_mkdir(argv[1]) != 0) {
+        vga_println("mkdir failed. Check parent path/name.");
+        return;
+    }
+
+    vga_print("Created directory ");
+    vga_println(argv[1]);
+}
+
+static void program_rmdir(int argc, char *argv[]) {
+    if (argc < 2) {
+        vga_println("Usage: rmdir <path>");
+        return;
+    }
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    if (fs_rmdir(argv[1]) != 0) {
+        vga_println("rmdir failed. Directory must exist and be empty.");
+        return;
+    }
+
+    vga_print("Removed directory ");
+    vga_println(argv[1]);
+}
+
+static void program_cd(int argc, char *argv[]) {
+    const char *target = "/";
+
+    if (argc >= 2) {
+        target = argv[1];
+    }
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    if (fs_set_cwd(target) != 0) {
+        vga_println("cd failed. Directory not found.");
+    }
+}
+
+static void program_pwd(int argc, char *argv[]) {
+    char path[FS_PATH_MAX_LEN + 1];
+
+    (void)argc;
+    (void)argv;
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    if (fs_get_cwd(path, sizeof(path)) != 0) {
+        vga_println("pwd failed.");
+        return;
+    }
+
+    vga_println(path);
+}
+
+static int path_join(const char *base, const char *name, char *out, size_t out_size) {
+    size_t base_len;
+    size_t name_len;
+    size_t pos = 0;
+
+    if (base == 0 || name == 0 || out == 0) {
+        return -1;
+    }
+
+    base_len = strlen(base);
+    name_len = strlen(name);
+
+    if (base_len == 0) {
+        if (name_len + 1 > out_size) {
+            return -1;
+        }
+        strcpy(out, name);
+        return 0;
+    }
+
+    if (strcmp(base, "/") == 0) {
+        if (1 + name_len + 1 > out_size) {
+            return -1;
+        }
+        out[pos++] = '/';
+        for (size_t i = 0; i < name_len; i++) {
+            out[pos++] = name[i];
+        }
+        out[pos] = '\0';
+        return 0;
+    }
+
+    if (base_len + 1 + name_len + 1 > out_size) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < base_len; i++) {
+        out[pos++] = base[i];
+    }
+    out[pos++] = '/';
+    for (size_t i = 0; i < name_len; i++) {
+        out[pos++] = name[i];
+    }
+    out[pos] = '\0';
+
+    return 0;
+}
+
+static void print_tree_recursive(const char *path, int depth) {
+    fs_entry_info_t entries[64];
+    size_t count = 0;
+
+    if (depth > 8) {
+        vga_println("  ... (depth limit reached)");
+        return;
+    }
+
+    if (fs_list_dir(path, entries, 64, &count) != 0) {
+        return;
+    }
+
+    for (size_t i = 0; i < count && i < 64; i++) {
+        char child_path[FS_PATH_MAX_LEN + 1];
+
+        for (int indent = 0; indent < depth; indent++) {
+            vga_print("  ");
+        }
+
+        vga_print("|- ");
+        vga_print(entries[i].name);
+        if (entries[i].type == FS_NODE_DIR) {
+            vga_println("/");
+            if (path_join(path, entries[i].name, child_path, sizeof(child_path)) == 0) {
+                print_tree_recursive(child_path, depth + 1);
+            }
+        } else {
+            vga_println("");
+        }
+    }
+}
+
+static void program_tree(int argc, char *argv[]) {
+    char root_path[FS_PATH_MAX_LEN + 1];
+    const char *target = "";
+
+    if (argc >= 2) {
+        target = argv[1];
+    }
+
+    if (!fs_is_ready()) {
+        vga_println("Filesystem unavailable. Run mkfs first.");
+        return;
+    }
+
+    if (target[0] == '\0') {
+        if (fs_get_cwd(root_path, sizeof(root_path)) != 0) {
+            vga_println("tree failed.");
+            return;
+        }
+        target = root_path;
+    }
+
+    vga_println(target);
+    print_tree_recursive(target, 1);
+}
+
 static void program_write(int argc, char *argv[]) {
     uint32_t size;
 
     if (argc < 3) {
-        vga_println("Usage: write <name> <text>");
+        vga_println("Usage: write <path> <text>");
         return;
     }
 
@@ -475,7 +679,7 @@ static void program_cat(int argc, char *argv[]) {
     uint32_t size = 0;
 
     if (argc < 2) {
-        vga_println("Usage: cat <name>");
+        vga_println("Usage: cat <path>");
         return;
     }
 
@@ -495,7 +699,7 @@ static void program_cat(int argc, char *argv[]) {
 
 static void program_rm(int argc, char *argv[]) {
     if (argc < 2) {
-        vga_println("Usage: rm <name>");
+        vga_println("Usage: rm <path>");
         return;
     }
 
