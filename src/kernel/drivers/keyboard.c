@@ -6,6 +6,8 @@
 #include "keyboard.h"
 #include "idt.h"
 #include "io.h"
+#include "shell.h"
+#include "string.h"
 #include "vga.h"
 
 #define KEYBOARD_DATA_PORT 0x60
@@ -114,6 +116,46 @@ static void cursor_right_once(void) {
     vga_set_cursor(x, y);
 }
 
+static void redraw_input_line(const char *buffer, int *len, int *pos, int old_len, int target_pos) {
+    while (*pos > 0) {
+        cursor_left_once();
+        (*pos)--;
+    }
+
+    for (int i = 0; i < *len; i++) {
+        vga_putchar(buffer[i]);
+    }
+
+    for (int i = *len; i < old_len; i++) {
+        vga_putchar(' ');
+    }
+
+    int span = old_len;
+    if (*len > span) {
+        span = *len;
+    }
+
+    for (int i = 0; i < span; i++) {
+        cursor_left_once();
+    }
+
+    for (int i = 0; i < target_pos; i++) {
+        cursor_right_once();
+    }
+
+    *pos = target_pos;
+}
+
+static int copy_history_entry(char *dst, int max_len, const char *src) {
+    int n = 0;
+    while (src[n] && n < max_len) {
+        dst[n] = src[n];
+        n++;
+    }
+    dst[n] = '\0';
+    return n;
+}
+
 /* Keyboard IRQ handler */
 static void keyboard_handler(registers_t *regs) {
     (void)regs;
@@ -134,10 +176,18 @@ static void keyboard_handler(registers_t *regs) {
 
         switch (scancode) {
             case 0x48: /* Up arrow */
-                buffer_push(KEY_SCROLL_UP);
+                if (shift_pressed) {
+                    buffer_push(KEY_SCROLL_UP);
+                } else {
+                    buffer_push(KEY_HISTORY_PREV);
+                }
                 break;
             case 0x50: /* Down arrow */
-                buffer_push(KEY_SCROLL_DOWN);
+                if (shift_pressed) {
+                    buffer_push(KEY_SCROLL_DOWN);
+                } else {
+                    buffer_push(KEY_HISTORY_NEXT);
+                }
                 break;
             case 0x4B: /* Left arrow */
                 buffer_push(KEY_CURSOR_LEFT);
@@ -238,6 +288,12 @@ char keyboard_getchar(void) {
 int keyboard_readline(char *buffer, int max_len) {
     int len = 0;
     int pos = 0;
+    int browsing_history = 0;
+    int history_index = 0;
+    int draft_len = 0;
+    char draft[KEY_BUFFER_SIZE];
+
+    draft[0] = '\0';
     max_len--;  /* Reserve space for null terminator */
 
     while (1) {
@@ -264,6 +320,56 @@ int keyboard_readline(char *buffer, int max_len) {
             for (int i = 0; i < VGA_HEIGHT / 2; i++) {
                 vga_scroll_down();
             }
+            continue;
+        }
+
+        if (c == KEY_HISTORY_PREV) {
+            int history_total = (int)shell_history_count();
+            if (history_total == 0) {
+                continue;
+            }
+
+            vga_scroll_to_bottom();
+
+            if (!browsing_history) {
+                draft_len = len;
+                memcpy(draft, buffer, (size_t)draft_len);
+                draft[draft_len] = '\0';
+                browsing_history = 1;
+                history_index = history_total;
+            }
+
+            if (history_index > 0) {
+                int old_len = len;
+                history_index--;
+                len = copy_history_entry(buffer, max_len, shell_history_entry((size_t)history_index));
+                redraw_input_line(buffer, &len, &pos, old_len, len);
+            }
+            continue;
+        }
+
+        if (c == KEY_HISTORY_NEXT) {
+            if (!browsing_history) {
+                continue;
+            }
+
+            vga_scroll_to_bottom();
+
+            int history_total = (int)shell_history_count();
+            int old_len = len;
+
+            if (history_index < history_total - 1) {
+                history_index++;
+                len = copy_history_entry(buffer, max_len, shell_history_entry((size_t)history_index));
+            } else {
+                browsing_history = 0;
+                history_index = history_total;
+                len = draft_len;
+                memcpy(buffer, draft, (size_t)draft_len);
+                buffer[len] = '\0';
+            }
+
+            redraw_input_line(buffer, &len, &pos, old_len, len);
             continue;
         }
 
@@ -331,6 +437,7 @@ int keyboard_readline(char *buffer, int max_len) {
             vga_putchar('\n');
             return len;
         } else if (c == '\b') {
+            browsing_history = 0;
             if (pos > 0) {
                 cursor_left_once();
                 pos--;
@@ -350,6 +457,7 @@ int keyboard_readline(char *buffer, int max_len) {
                 }
             }
         } else if (c >= ' ' && pos < max_len) {
+            browsing_history = 0;
             for (int i = len; i > pos; i--) {
                 buffer[i] = buffer[i - 1];
             }

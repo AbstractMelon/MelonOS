@@ -17,6 +17,8 @@
 #define KEY_DELETE           ((char)0x17)
 #define KEY_HOME             ((char)0x18)
 #define KEY_END              ((char)0x19)
+#define KEY_HISTORY_PREV     ((char)0x1A)
+#define KEY_HISTORY_NEXT     ((char)0x1B)
 
 /* Initialize the keyboard driver */
 void keyboard_init(void);
