@@ -12,6 +12,11 @@
 #define KEY_SCROLL_DOWN      ((char)0x12)
 #define KEY_SCROLL_PAGE_UP   ((char)0x13)
 #define KEY_SCROLL_PAGE_DOWN ((char)0x14)
+#define KEY_CURSOR_LEFT      ((char)0x15)
+#define KEY_CURSOR_RIGHT     ((char)0x16)
+#define KEY_DELETE           ((char)0x17)
+#define KEY_HOME             ((char)0x18)
+#define KEY_END              ((char)0x19)
 
 /* Initialize the keyboard driver */
 void keyboard_init(void);

@@ -86,6 +86,34 @@ static char buffer_pop(void) {
     return c;
 }
 
+static void cursor_left_once(void) {
+    int x = vga_get_cursor_x();
+    int y = vga_get_cursor_y();
+
+    if (x > 0) {
+        x--;
+    } else if (y > 0) {
+        y--;
+        x = VGA_WIDTH - 1;
+    }
+
+    vga_set_cursor(x, y);
+}
+
+static void cursor_right_once(void) {
+    int x = vga_get_cursor_x();
+    int y = vga_get_cursor_y();
+
+    if (x < VGA_WIDTH - 1) {
+        x++;
+    } else if (y < VGA_HEIGHT - 1) {
+        y++;
+        x = 0;
+    }
+
+    vga_set_cursor(x, y);
+}
+
 /* Keyboard IRQ handler */
 static void keyboard_handler(registers_t *regs) {
     (void)regs;
@@ -111,11 +139,26 @@ static void keyboard_handler(registers_t *regs) {
             case 0x50: /* Down arrow */
                 buffer_push(KEY_SCROLL_DOWN);
                 break;
+            case 0x4B: /* Left arrow */
+                buffer_push(KEY_CURSOR_LEFT);
+                break;
+            case 0x4D: /* Right arrow */
+                buffer_push(KEY_CURSOR_RIGHT);
+                break;
             case 0x49: /* Page up */
                 buffer_push(KEY_SCROLL_PAGE_UP);
                 break;
             case 0x51: /* Page down */
                 buffer_push(KEY_SCROLL_PAGE_DOWN);
+                break;
+            case 0x53: /* Delete */
+                buffer_push(KEY_DELETE);
+                break;
+            case 0x47: /* Home */
+                buffer_push(KEY_HOME);
+                break;
+            case 0x4F: /* End */
+                buffer_push(KEY_END);
                 break;
             default:
                 break;
@@ -193,6 +236,7 @@ char keyboard_getchar(void) {
 }
 
 int keyboard_readline(char *buffer, int max_len) {
+    int len = 0;
     int pos = 0;
     max_len--;  /* Reserve space for null terminator */
 
@@ -223,20 +267,105 @@ int keyboard_readline(char *buffer, int max_len) {
             continue;
         }
 
+        if (c == KEY_CURSOR_LEFT) {
+            vga_scroll_to_bottom();
+            if (pos > 0) {
+                pos--;
+                cursor_left_once();
+            }
+            continue;
+        }
+
+        if (c == KEY_CURSOR_RIGHT) {
+            vga_scroll_to_bottom();
+            if (pos < len) {
+                pos++;
+                cursor_right_once();
+            }
+            continue;
+        }
+
+        if (c == KEY_HOME) {
+            vga_scroll_to_bottom();
+            while (pos > 0) {
+                pos--;
+                cursor_left_once();
+            }
+            continue;
+        }
+
+        if (c == KEY_END) {
+            vga_scroll_to_bottom();
+            while (pos < len) {
+                pos++;
+                cursor_right_once();
+            }
+            continue;
+        }
+
+        if (c == KEY_DELETE) {
+            vga_scroll_to_bottom();
+            if (pos < len) {
+                for (int i = pos; i < len - 1; i++) {
+                    buffer[i] = buffer[i + 1];
+                }
+                len--;
+
+                for (int i = pos; i < len; i++) {
+                    vga_putchar(buffer[i]);
+                }
+                vga_putchar(' ');
+
+                int move_left = (len - pos) + 1;
+                while (move_left-- > 0) {
+                    cursor_left_once();
+                }
+            }
+            continue;
+        }
+
         vga_scroll_to_bottom();
 
         if (c == '\n') {
-            buffer[pos] = '\0';
+            buffer[len] = '\0';
             vga_putchar('\n');
-            return pos;
+            return len;
         } else if (c == '\b') {
             if (pos > 0) {
+                cursor_left_once();
                 pos--;
-                vga_backspace();
+                for (int i = pos; i < len - 1; i++) {
+                    buffer[i] = buffer[i + 1];
+                }
+                len--;
+
+                for (int i = pos; i < len; i++) {
+                    vga_putchar(buffer[i]);
+                }
+                vga_putchar(' ');
+
+                int move_left = (len - pos) + 1;
+                while (move_left-- > 0) {
+                    cursor_left_once();
+                }
             }
-        } else if (pos < max_len) {
-            buffer[pos++] = c;
-            vga_putchar(c);
+        } else if (c >= ' ' && pos < max_len) {
+            for (int i = len; i > pos; i--) {
+                buffer[i] = buffer[i - 1];
+            }
+            buffer[pos] = c;
+            len++;
+            pos++;
+
+            for (int i = pos - 1; i < len; i++) {
+                vga_putchar(buffer[i]);
+            }
+            vga_putchar(' ');
+
+            int move_left = (len - pos) + 1;
+            while (move_left-- > 0) {
+                cursor_left_once();
+            }
         }
     }
 }
