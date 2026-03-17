@@ -65,6 +65,13 @@ void vga_print_hex(uint32_t num);
 /* Scroll the screen up by one line */
 void vga_scroll(void);
 
+/* Scroll viewport up/down through history */
+void vga_scroll_up(void);
+void vga_scroll_down(void);
+
+/* Jump viewport to latest output */
+void vga_scroll_to_bottom(void);
+
 /* Update the hardware cursor position */
 void vga_update_cursor(void);
 

@@ -8,6 +8,11 @@
 
 #include <stdint.h>
 
+#define KEY_SCROLL_UP        ((char)0x11)
+#define KEY_SCROLL_DOWN      ((char)0x12)
+#define KEY_SCROLL_PAGE_UP   ((char)0x13)
+#define KEY_SCROLL_PAGE_DOWN ((char)0x14)
+
 /* Initialize the keyboard driver */
 void keyboard_init(void);
 

@@ -21,6 +21,7 @@ static volatile int buffer_end = 0;
 /* Shift state */
 static int shift_pressed = 0;
 static int caps_lock = 0;
+static int extended_scancode = 0;
 
 /* US keyboard layout scancode -> ASCII (lowercase) */
 static const char scancode_to_ascii[] = {
@@ -91,6 +92,39 @@ static void keyboard_handler(registers_t *regs) {
 
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
 
+    if (scancode == 0xE0) {
+        extended_scancode = 1;
+        return;
+    }
+
+    if (extended_scancode) {
+        /* Extended key release */
+        if (scancode & 0x80) {
+            extended_scancode = 0;
+            return;
+        }
+
+        switch (scancode) {
+            case 0x48: /* Up arrow */
+                buffer_push(KEY_SCROLL_UP);
+                break;
+            case 0x50: /* Down arrow */
+                buffer_push(KEY_SCROLL_DOWN);
+                break;
+            case 0x49: /* Page up */
+                buffer_push(KEY_SCROLL_PAGE_UP);
+                break;
+            case 0x51: /* Page down */
+                buffer_push(KEY_SCROLL_PAGE_DOWN);
+                break;
+            default:
+                break;
+        }
+
+        extended_scancode = 0;
+        return;
+    }
+
     /* Key release (bit 7 set) */
     if (scancode & 0x80) {
         uint8_t released = scancode & 0x7F;
@@ -140,6 +174,7 @@ void keyboard_init(void) {
     buffer_end = 0;
     shift_pressed = 0;
     caps_lock = 0;
+    extended_scancode = 0;
 
     /* Install keyboard IRQ handler (IRQ1) */
     irq_install_handler(1, keyboard_handler);
@@ -163,6 +198,32 @@ int keyboard_readline(char *buffer, int max_len) {
 
     while (1) {
         char c = keyboard_getchar();
+
+        if (c == KEY_SCROLL_UP) {
+            vga_scroll_up();
+            continue;
+        }
+
+        if (c == KEY_SCROLL_DOWN) {
+            vga_scroll_down();
+            continue;
+        }
+
+        if (c == KEY_SCROLL_PAGE_UP) {
+            for (int i = 0; i < VGA_HEIGHT / 2; i++) {
+                vga_scroll_up();
+            }
+            continue;
+        }
+
+        if (c == KEY_SCROLL_PAGE_DOWN) {
+            for (int i = 0; i < VGA_HEIGHT / 2; i++) {
+                vga_scroll_down();
+            }
+            continue;
+        }
+
+        vga_scroll_to_bottom();
 
         if (c == '\n') {
             buffer[pos] = '\0';
