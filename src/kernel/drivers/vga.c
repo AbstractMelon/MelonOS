@@ -69,6 +69,17 @@ static void history_cell_write(int line, int col, uint16_t value) {
     history_buffer[line_slot(line) * VGA_WIDTH + col] = value;
 }
 
+static int cursor_is_visible(void) {
+    return cursor_line >= viewport_top && cursor_line < (viewport_top + VGA_HEIGHT);
+}
+
+static void write_visible_cell(int line, int col, uint16_t value) {
+    if (line >= viewport_top && line < (viewport_top + VGA_HEIGHT)) {
+        int y = line - viewport_top;
+        vga_buffer[y * VGA_WIDTH + col] = value;
+    }
+}
+
 static void render_viewport(void) {
     for (int y = 0; y < VGA_HEIGHT; y++) {
         int line = viewport_top + y;
@@ -142,6 +153,9 @@ void vga_scroll(void) {
 }
 
 void vga_putchar(char c) {
+    int old_viewport_top = viewport_top;
+    int at_bottom = is_viewport_at_bottom();
+
     if (c == '\n') {
         cursor_x = 0;
         push_new_line();
@@ -153,16 +167,23 @@ void vga_putchar(char c) {
         vga_backspace();
         return;
     } else {
-        history_cell_write(cursor_line, cursor_x, vga_entry(c, current_color));
+        uint16_t entry = vga_entry(c, current_color);
+        history_cell_write(cursor_line, cursor_x, entry);
+        if (at_bottom) {
+            write_visible_cell(cursor_line, cursor_x, entry);
+        }
         cursor_x++;
     }
 
     if (cursor_x >= VGA_WIDTH) {
         cursor_x = 0;
         push_new_line();
+        at_bottom = is_viewport_at_bottom();
     }
 
-    render_viewport();
+    if (viewport_top != old_viewport_top || !at_bottom || !cursor_is_visible()) {
+        render_viewport();
+    }
     vga_update_cursor();
 }
 
@@ -259,6 +280,8 @@ int vga_get_cursor_y(void) {
 }
 
 void vga_backspace(void) {
+    int at_bottom = is_viewport_at_bottom();
+
     if (cursor_x > 0) {
         cursor_x--;
     } else if (cursor_line > oldest_line()) {
@@ -266,8 +289,15 @@ void vga_backspace(void) {
         cursor_x = VGA_WIDTH - 1;
     }
 
-    history_cell_write(cursor_line, cursor_x, vga_entry(' ', current_color));
-    render_viewport();
+    uint16_t entry = vga_entry(' ', current_color);
+    history_cell_write(cursor_line, cursor_x, entry);
+
+    if (at_bottom) {
+        write_visible_cell(cursor_line, cursor_x, entry);
+    } else {
+        render_viewport();
+    }
+
     vga_update_cursor();
 }
 
